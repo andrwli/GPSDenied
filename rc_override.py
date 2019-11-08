@@ -1,14 +1,21 @@
+'''
+Module for Navigation with RC-override
+Use move_to_target() to move to a target with rc_override
+
+'''
+
 import dronekit
 import math
 import time
 
-TARGET_WAYPOINT = dronekit.LocationGlobal(-35.356833, 149.162703, None)
+#TARGET_WAYPOINT = dronekit.LocationGlobal(-35.356833, 149.162703, None)
+TARGET_WAYPOINT = dronekit.LocationGlobal(-35.359124, 149.168475, None)
 
 # in lat/lon degrees
 # 1 degree = 69 mi = 111045 m
-DIST_MARGIN_OF_ERROR = 0.0003
+DIST_MARGIN_OF_ERROR = 0.0001
 
-TARGET_ATTITUDE = 100
+TARGET_RELATIVE_ALTITUDE = 50
 
 # PID parameters
 P = 3
@@ -23,6 +30,9 @@ def main():
     arm(vehicle)
     move_to_target(vehicle, TARGET_WAYPOINT)
     vehicle.mode = dronekit.VehicleMode("LOITER")
+    
+    # Sleeping so all MAVLINK messages are correctly sent
+    time.sleep(3)
 
 def arm(vehicle):
     print("Basic pre-arm checks")
@@ -43,14 +53,19 @@ def move_to_target(vehicle, target_waypoint):
     while not reached_target:
         time.sleep(2.5)
         correct_thrust(vehicle)
+        #change_thrust(vehicle, 1500)
         correct_yaw(vehicle, target_waypoint)
+
+        # TODO: integrate multiprocessing to check if reached target
         reached_target = check_reached_target(vehicle, target_waypoint)
 
+    return reached_target
+
 def correct_thrust(vehicle):
-    if vehicle.location.alt <= TARGET_ATTITUDE:
-        change_thrust(vehicle, 1500)
+    if vehicle.location.global_relative_frame.alt <= TARGET_RELATIVE_ALTITUDE:
+        change_thrust(vehicle, 1700)
     else:
-        change_thrust(vehicle, 1800)
+        change_thrust(vehicle, 1500)
 
 def correct_yaw(vehicle, target_waypoint):
     calculated_yaw = get_calculated_yaw(vehicle, target_waypoint)
@@ -66,12 +81,18 @@ def get_calculated_yaw(vehicle, target_waypoint):
     calculated_yaw = 0 
     # calculate error btw heading and line to destination
     current_waypoint = get_current_location(vehicle)
-    destination_angle_from_north = get_angle(current_waypoint, TARGET_WAYPOINT)
+    destination_angle_from_north = to_positive_angle(get_angle(current_waypoint, target_waypoint))
     heading_angle_from_north = get_heading_angle(vehicle)
 
+    print("destination angle from north:", destination_angle_from_north)
+    print("heading angle from north:", heading_angle_from_north)
+
     # angle to destination - negative angle from north
-    error = destination_angle_from_north - (heading_angle_from_north - 360)
-    increment = math.erf(error * P / 360) * max_yaw_increment
+    error = get_smallest_angle_diff(heading_angle_from_north, destination_angle_from_north)
+    error_percent = error * P / 360
+    error_percent = -1 if error_percent < -1 else 1 if error_percent > 1 else error_percent
+    #increment = math.erf(error * P / 360) * max_yaw_increment
+    increment = error_percent * max_yaw_increment
 
     print("error:", error)
     print("max_yaw_inc:", increment) 
@@ -80,6 +101,12 @@ def get_calculated_yaw(vehicle, target_waypoint):
     return calculated_yaw
 
 def get_current_location(vehicle):
+    '''
+    Gets current lat, lon from GPS
+    Need to replace implementation of this function for true GPS denied
+
+    '''
+
     return vehicle.location.global_frame
 
 def get_angle(current_waypoint, target_waypoint):
@@ -88,11 +115,20 @@ def get_angle(current_waypoint, target_waypoint):
 
     return math.degrees(math.atan2(lon_dist, lat_dist))
 
+def get_heading_angle(vehicle):
+    return vehicle.heading
+
 def get_distance(p0, p1):
     return math.sqrt((p0.lat - p1.lat)**2 + (p0.lon - p1.lon)**2)
 
-def get_heading_angle(vehicle):
-    return vehicle.heading
+def to_positive_angle(angle):
+    return angle % 360
+
+def get_smallest_angle_diff(source, target):
+    result = target - source
+    result = (result + 180) % 360 - 180
+
+    return result
 
 def circle_currrent_location(vehicle):
     '''
